@@ -70,6 +70,7 @@ func NewReadAutoCloser(r io.Reader) ReadAutoCloser {
 type Pipe struct {
 	Reader ReadAutoCloser
 	stdout io.Writer
+	at     string
 
 	// because pipe stages are concurrent, protect 'err'
 	mu  *sync.Mutex
@@ -206,6 +207,11 @@ func File(name string) *Pipe {
 		return p.WithError(err)
 	}
 	return p.WithReader(f)
+}
+
+// At returns a pipe that will use the given directory for external commands.
+func At(path string) *Pipe {
+	return NewPipe().At(path)
 }
 
 // FindFiles takes a directory path and creates a pipe listing all the files in
@@ -411,6 +417,7 @@ func (p *Pipe) Echo(s string) *Pipe {
 // If the command had a non-zero exit status, the pipe's error status will also
 // be set to the string "exit status X", where X is the integer exit status.
 func (p *Pipe) Exec(command string) *Pipe {
+	at := p.at
 	return p.Filter(func(r io.Reader, w io.Writer) error {
 		args, ok := shell.Split(command) // strings.Fields doesn't handle quotes
 		if !ok {
@@ -420,6 +427,7 @@ func (p *Pipe) Exec(command string) *Pipe {
 		cmd.Stdin = r
 		cmd.Stdout = w
 		cmd.Stderr = w
+		cmd.Dir = at
 		err := cmd.Start()
 		if err != nil {
 			fmt.Fprintln(w, err)
@@ -444,6 +452,7 @@ func (p *Pipe) ExecForEach(command string) *Pipe {
 	if err != nil {
 		return p.WithError(err)
 	}
+	at := p.at
 	return p.Filter(func(r io.Reader, w io.Writer) error {
 		scanner := bufio.NewScanner(r)
 		for scanner.Scan() {
@@ -459,6 +468,7 @@ func (p *Pipe) ExecForEach(command string) *Pipe {
 			cmd := exec.Command(args[0], args[1:]...)
 			cmd.Stdout = w
 			cmd.Stderr = w
+			cmd.Dir = at
 			err = cmd.Start()
 			if err != nil {
 				fmt.Fprintln(w, err)
@@ -479,7 +489,7 @@ func (p *Pipe) ExecForEach(command string) *Pipe {
 // concurrent filters have completed, call Wait on the end of the pipe.
 func (p *Pipe) Filter(filter func(io.Reader, io.Writer) error) *Pipe {
 	pr, pw := io.Pipe()
-	q := NewPipe().WithReader(pr)
+	q := p.newChildPipe().WithReader(pr)
 	go func() {
 		defer pw.Close()
 		err := filter(p, pw)
@@ -514,7 +524,7 @@ func (p *Pipe) FilterScan(filter func(string, io.Writer)) *Pipe {
 // are less than N lines. If N is zero or negative, there is no output at all.
 func (p *Pipe) First(n int) *Pipe {
 	if n <= 0 {
-		return NewPipe()
+		return p.newChildPipe()
 	}
 	i := 0
 	return p.FilterScan(func(line string, w io.Writer) {
@@ -642,7 +652,7 @@ func (p *Pipe) JQ(query string) *Pipe {
 // less than N lines. If N is zero or negative, there is no output at all.
 func (p *Pipe) Last(n int) *Pipe {
 	if n <= 0 {
-		return NewPipe()
+		return p.newChildPipe()
 	}
 	return p.Filter(func(r io.Reader, w io.Writer) error {
 		scanner := bufio.NewScanner(r)
@@ -742,6 +752,12 @@ func (p *Pipe) AppendFile(fileName string) (int64, error) {
 	return p.writeOrAppendFile(fileName, os.O_APPEND|os.O_CREATE|os.O_WRONLY)
 }
 
+// At sets the working directory for any external commands run with the pipe.
+func (p *Pipe) At(dir string) *Pipe {
+	p.at = dir
+	return p
+}
+
 // Bytes returns the contents of the pipe as a []]byte, or an error.
 func (p *Pipe) Bytes() ([]byte, error) {
 	res, err := io.ReadAll(p)
@@ -815,6 +831,12 @@ func (p *Pipe) Wait() {
 	if err != nil {
 		p.SetError(err)
 	}
+}
+
+func (p *Pipe) newChildPipe() *Pipe {
+	newPipe := NewPipe()
+	newPipe.at = p.at
+	return newPipe
 }
 
 // WriteFile writes the input to the specified file, and returns the number of

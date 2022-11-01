@@ -961,6 +961,38 @@ func TestExecRunsGoHelpAndGetsUsageMessage(t *testing.T) {
 	}
 }
 
+func TestAtRunsInTheGivenDirectory(t *testing.T) {
+	t.Parallel()
+	tempDir := os.TempDir()
+	s, err := script.At(tempDir).Exec("pwd").String()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s != tempDir+"\n" {
+		t.Fatalf("wanted working dir to be %q, got %q", tempDir, s)
+	}
+
+	s, err = script.At(tempDir).WithReader(strings.NewReader("foo")).ExecForEach("pwd").String()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s != tempDir+"\n" {
+		t.Fatalf("wanted working dir for each to be %q, got %q", tempDir, s)
+	}
+}
+
+func TestPipeAtRunsInTheGivenDirectory(t *testing.T) {
+	t.Parallel()
+	tempDir := os.TempDir()
+	s, err := script.NewPipe().At(tempDir).Exec("pwd").String()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s != tempDir+"\n" {
+		t.Fatalf("wanted working dir to be %q, got %q", tempDir, s)
+	}
+}
+
 func TestFileOutputsContentsOfSpecifiedFile(t *testing.T) {
 	t.Parallel()
 	want := "This is the first line in the file.\nHello, world.\nThis is another line in the file.\n"
